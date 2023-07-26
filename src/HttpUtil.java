@@ -1,104 +1,92 @@
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.NodeList;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
 import java.net.HttpURLConnection;
 import java.net.URL;
-
 import java.io.*;
+import java.text.DecimalFormat;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 
-import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
-import java.util.Map;
-import java.util.Scanner;
 
 
 
 public class HttpUtil {
-    public static final String DATE_FORMATTER = "d.MM.yyyy";
+
     public static void main(String[] args) {
-         String enteredDate = enterDate();
-        String url = "https://api.privatbank.ua/p24api/exchange_rates?json&date=" + enteredDate.toString();
-        System.out.print(url);
-        String result = HttpUtil.sendRequest(url, null, null);
-        System.out.println("Result: " + result);
+        if (args.length != 2) {
+            System.out.println("Использование: currency_rates --code=USD --date=2022-10-08");
+            return;
+        }
 
-    }
+        String currencyCode = null;
+        String dateStr = null;
 
-    private static String enterDate() {
-
-        System.out.println("Enter date in dd.MM.yyyy format:");
-        Scanner scanner = new Scanner(System.in);
-        while (scanner.hasNext()) {
-            String date = scanner.nextLine();
-            if (date.isEmpty()) {
-                continue;
-            }
-
-            try {
-                DateTimeFormatter formatter = DateTimeFormatter.ofPattern(DATE_FORMATTER);
-                LocalDate parse = LocalDate.parse(date, formatter);
-                return parse.format(formatter);
-            } catch (Exception ex) {
-                System.out.println("Invalid date format");
-                return enterDate();
+        for (String arg : args) {
+            if (arg.startsWith("--code=")) {
+                currencyCode = arg.substring(7);
+            } else if (arg.startsWith("--date=")) {
+                dateStr = arg.substring(7);
             }
         }
-        System.out.println("Please enter date.");
-        return enterDate();
+
+        if (currencyCode == null || dateStr == null) {
+            System.out.println("Необходимо указать код валюты и дату.");
+            return;
+        }
+
+        SimpleDateFormat inputDateFormat = new SimpleDateFormat("yyyy-MM-dd");
+        try {
+            Date date = inputDateFormat.parse(dateStr);
+            String formattedDate = new SimpleDateFormat("dd/MM/yyyy").format(date);
+            getCurrencyRate(currencyCode, formattedDate);
+        } catch (ParseException e) {
+            System.out.println("Неверный формат даты. Используйте формат YYYY-MM-DD");
+        }
     }
 
-    /**
-     * @param url     - required
-     * @param headers - nullable
-     * @param request - nullable
-     */
-    public static String sendRequest(String url, Map<String, String> headers, String request) {
-        String result = null;
-        HttpURLConnection urlConnection = null;
+    private static void getCurrencyRate(String currencyCode, String formattedDate) {
+        String apiUrl = "https://www.cbr.ru/scripts/XML_daily.asp?date_req=" + formattedDate;
         try {
-            URL requestUrl = new URL(url);
-            urlConnection = (HttpURLConnection) requestUrl.openConnection();
-            urlConnection.setReadTimeout(20000);
-            urlConnection.setConnectTimeout(20000);
-            urlConnection.setRequestMethod("GET");
+            URL url = new URL(apiUrl);
+            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("GET");
+            connection.connect();
 
-            if (request != null) {
-                urlConnection.setDoOutput(true);
-                urlConnection.setRequestMethod("POST");
-                DataOutputStream outputStream = new DataOutputStream(urlConnection.getOutputStream());
-                outputStream.writeBytes(request);
-                outputStream.flush();
-                outputStream.close();
+            BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+            StringBuilder response = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                response.append(line);
             }
+            reader.close();
 
-            if (headers != null) {
-                for (Map.Entry<String, String> entry : headers.entrySet()) {
-                    urlConnection.addRequestProperty(entry.getKey(), entry.getValue());
+            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            DocumentBuilder builder = factory.newDocumentBuilder();
+            Document doc = builder.parse(url.openStream());
+            doc.getDocumentElement().normalize();
+
+            NodeList valuteList = doc.getElementsByTagName("Valute");
+            for (int i = 0; i < valuteList.getLength(); i++) {
+                Element valute = (Element) valuteList.item(i);
+                String charCode = valute.getElementsByTagName("CharCode").item(0).getTextContent();
+                if (charCode.equalsIgnoreCase(currencyCode)) {
+                    String name = valute.getElementsByTagName("Name").item(0).getTextContent();
+                    String value = valute.getElementsByTagName("Value").item(0).getTextContent();
+                    DecimalFormat decimalFormat = new DecimalFormat("#.####");
+                    System.out.println(currencyCode + " (" + name + "): " + decimalFormat.format(Double.parseDouble(value.replace(",", "."))));
+                    return;
                 }
             }
 
-            int status = urlConnection.getResponseCode();
-            System.out.println("status code:" + status);
-
-            if (status == HttpURLConnection.HTTP_OK) {
-                result = getStringFromStream(urlConnection.getInputStream());
-            }
+            System.out.println("Валюта с кодом " + currencyCode + " не найдена.");
+        } catch (IOException e) {
+            System.out.println("Ошибка при получении данных с сервера: " + e.getMessage());
         } catch (Exception e) {
-            System.out.println("sendRequest failed");
-        } finally {
-            if (urlConnection != null) {
-                urlConnection.disconnect();
-            }
+            System.out.println("Ошибка при обработке XML данных: " + e.getMessage());
         }
-        return result;
     }
-
-    private static String getStringFromStream(InputStream inputStream) throws IOException {
-        final int BUFFER_SIZE = 4096;
-        ByteArrayOutputStream resultStream = new ByteArrayOutputStream(BUFFER_SIZE);
-        byte[] buffer = new byte[BUFFER_SIZE];
-        int length;
-        while ((length = inputStream.read(buffer)) != -1) {
-            resultStream.write(buffer, 0, length);
-        }
-        return resultStream.toString("UTF-8");
-    }
-
 }
